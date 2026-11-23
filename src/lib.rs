@@ -1,7 +1,7 @@
 //! hosts-creator (Rust rewrite)
 //!
-//! Python 版 (`py-latest` ブランチの `hosts-creator.py`) と同一の設定・ファイル仕様で
-//! `/etc/hosts` を更新し続けるデーモン。差分は README の "Python 版との違い" を参照。
+//! 旧 Python 実装（2023 年版）と同一の設定・ファイル仕様で `/etc/hosts` を更新し続ける
+//! デーモン。差分は README の「旧 Python 版（2023）との違い」を参照。
 
 pub mod config;
 pub mod discovery;
