@@ -1,32 +1,63 @@
+# hosts-creator
 
-`hosts_list` に書いたホスト名を定期的に名前解決し、`/etc/hosts` を更新し続けるサイドカーです。
-`GET_RDS_ENDPOINT` / `GET_REDIS_ENDPOINT` を有効にすると、AWS 上の RDS / ElastiCache の
-エンドポイントをタグで抽出して同じように hosts に載せます。
+**English** | [日本語](README.ja.md)
+
+A sidecar that keeps `/etc/hosts` up to date by resolving a list of hostnames on a fixed interval.
+With `GET_RDS_ENDPOINT` / `GET_REDIS_ENDPOINT` enabled it also discovers RDS and ElastiCache endpoints
+in AWS by tag and writes those into the same file.
+
+The goal is not to lower CoreDNS load. It is to **take an application's name resolution off DNS
+entirely**: once the answer is in `/etc/hosts`, the process resolves locally and a CoreDNS outage no
+longer touches it.
 
 ```mermaid
 sequenceDiagram
   participant nginx
   participant hosts-creator
-  critical ① 初期設定
-  Note over hosts-creator: configのmount(/etc/create_hosts/setting.ini) TTL設定など
-  Note over hosts-creator: hosts_listのmount(/etc/create_hosts/hosts_list) 解決したいアドレスリスト
-  nginx->>hosts-creator: ※/etc/hostsは同じものを参照している
-  Note over hosts-creator: /etc/hostsを/etc/create_hosts/にbase_hostsとしてコピーする
-  Note over hosts-creator: 【GET_RDS_ENDPOINT】TrueならRDSのエンドポイントを列挙してrds_hosts_listを生成する
-  Note over hosts-creator: 【GET_REDIS_ENDPOINT】TrueならElastiCacheのエンドポイントを列挙してredis_hosts_listを生成する
+  critical 1. startup
+  Note over hosts-creator: setting.ini is mounted at /etc/create_hosts/setting.ini (TTL and switches)
+  Note over hosts-creator: hosts_list is mounted at /etc/create_hosts/hosts_list
+  nginx->>hosts-creator: both containers share the same /etc/hosts file
+  Note over hosts-creator: copies /etc/hosts to /etc/create_hosts/base_hosts
+  Note over hosts-creator: [GET_RDS_ENDPOINT] when true, lists RDS endpoints into rds_hosts_list
+  Note over hosts-creator: [GET_REDIS_ENDPOINT] when true, lists ElastiCache endpoints into redis_hosts_list
   end
-  loop ② TTL秒の間隔で実行
-  Note over hosts-creator: base_hostsを元にhostsの内容を組み立てる
-  Note over hosts-creator: hosts_list / rds_hosts_list / redis_hosts_listを1行ずつ名前解決し、成功したら追記する
-  Note over hosts-creator: 1件でも失敗したら中断し、/etc/hostsは書き換えない（Podは再起動）
-  Note over hosts-creator: 全行がIPv4/IPv6であることを検証してから/etc/hostsへ書き込む
-  hosts-creator->>nginx: ※nginxのhostsも更新される
+  loop 2. every TTL seconds
+  Note over hosts-creator: builds the new hosts content from base_hosts
+  Note over hosts-creator: resolves hosts_list / rds_hosts_list / redis_hosts_list line by line (8 in parallel)
+  Note over hosts-creator: one failure aborts the cycle and leaves /etc/hosts untouched (the Pod restarts)
+  Note over hosts-creator: validates every line is IPv4/IPv6 before writing
+  hosts-creator->>nginx: the sidecar's /etc/hosts is updated too
   end
 ```
 
-# setting.ini
+## Quick start
 
-`example`
+```bash
+# validate the configuration (no DNS, no AWS calls)
+docker run --rm -v "$PWD/sample/rust:/etc/create_hosts:ro" \
+  rhemsjapan/hosts-creator:v0.1.0 --check-config
+
+# run one cycle and print the result without touching /etc/hosts
+docker run --rm -v "$PWD/sample/rust:/etc/create_hosts:ro" \
+  rhemsjapan/hosts-creator:v0.1.0 --once --dry-run --base-hosts /tmp/base_hosts
+```
+
+`sample/rust/` is a self-contained kustomization (namespace and `configMapGenerator` included):
+
+```bash
+kubectl apply -k sample/rust
+```
+
+## Sharing `/etc/hosts` with a sidecar
+
+`/etc/hosts` must be the **same file** in both containers, mounted through a shared volume (emptyDir).
+Another container's `/etc/hosts` is a different file, so mounting nothing gets you nothing.
+
+For that reason the writer never uses `rename(2)`; it rewrites the file in place, which is what makes
+`subPath` mounts work. `base_hosts` keeps the entries kubelet generated, so the Pod's own entry is not lost.
+
+## setting.ini
 
 ```ini
 [DEFAULT]
@@ -45,139 +76,140 @@ SELECT_TAG_KEY =
 SELECT_TAG_VALUE =
 ```
 
-|param|description|default|Note|
+| param | description | default | notes |
 |:---:|:---|:---:|:---|
-|TTL|何秒間隔でhostsを書き換えるか|10|setting.ini > 環境変数(`$CREATE_HOST_TTL`)の優先順位。いずれも見つからない場合にデフォルト値を利用する|
-|GET_RDS_ENDPOINT|RDSのendpointを取得するかどうか|False|`true`（大文字小文字は問わない）のみ真。それ以外はfalse扱い|
-|GET_REDIS_ENDPOINT|Redisのendpointを取得するかどうか|False|〃（※`GET_RDS_ENDPOINT`と同様）|
-|CLOUD_ENV|クラウドサービスの種類。現状AWSのみ実装|aws|大文字小文字は問わない。有効時に誤った文字列を指定するとPodは終了する|
-|SELECT_TAG_KEY|対象リソースのタグkey名。指定しない場合は空にする|||
-|SELECT_TAG_VALUE|対象リソースのタグvalue名。指定しない場合は空にする|||
+| `TTL` | seconds between rewrites | 10 | `setting.ini` beats env `CREATE_HOST_TTL`; the built-in default applies only when neither exists |
+| `GET_RDS_ENDPOINT` | discover RDS endpoints | False | only `true` (case-insensitive) is truthy |
+| `GET_REDIS_ENDPOINT` | discover ElastiCache endpoints | False | same rule |
+| `CLOUD_ENV` | cloud provider, AWS only today | aws | case-insensitive; an unknown value while enabled makes the Pod exit |
+| `SELECT_TAG_KEY` | tag key used to select resources | | empty means "no filter" |
+| `SELECT_TAG_VALUE` | tag value used to select resources | | empty means "no filter" |
 
-タグ指定の挙動（旧 Python 版と同一。互換のため意図的に維持しています）:
+Tag matching is deliberately identical to the 2023 Python version:
 
-|指定|RDS|Redis|
+| what you set | RDS | Redis |
 |---|---|---|
-|key/value とも空|全インスタンス|全クラスタ|
-|key/value とも指定|一致するものだけ|一致するものだけ|
-|片方だけ指定|**0件**（設定ミスの可能性大／警告ログ出力）|**全件**（警告ログ出力）|
+| key and value both empty | every instance | every cluster |
+| key and value both set | matches only | matches only |
+| only one of them set | **nothing** (warning logged) | **everything** (warning logged) |
 
-# 環境変数
+## Environment variables
 
-setting.ini が無い／キーが無い場合に参照されます。
+Read when `setting.ini` or a key in it is missing.
 
-|変数|対応するキー|
+| variable | key it maps to |
 |---|---|
-|`CREATE_HOST_TTL`|`TTL`|
-|`GET_RDS_ENDPOINT`|`GET_RDS_ENDPOINT`|
-|`GET_REDIS_ENDPOINT`|`GET_REDIS_ENDPOINT`|
-|`RDS_CLOUD_ENV` / `RDS_SELECT_TAG_KEY` / `RDS_SELECT_TAG_VALUE`|`[RDS]` の同名キー|
-|`REDIS_CLOUD_ENV` / `REDIS_SELECT_TAG_KEY` / `REDIS_SELECT_TAG_VALUE`|`[REDIS]` の同名キー|
-|`AWS_REGION` / `AWS_DEFAULT_REGION`|AWS SDK が参照（IRSA 利用時は不要）|
-|`RUST_LOG`|ログレベル（既定 `info`）|
+| `CREATE_HOST_TTL` | `TTL` |
+| `GET_RDS_ENDPOINT`, `GET_REDIS_ENDPOINT` | same names |
+| `RDS_CLOUD_ENV`, `RDS_SELECT_TAG_KEY`, `RDS_SELECT_TAG_VALUE` | `[RDS]` |
+| `REDIS_CLOUD_ENV`, `REDIS_SELECT_TAG_KEY`, `REDIS_SELECT_TAG_VALUE` | `[REDIS]` |
+| `AWS_REGION` / `AWS_DEFAULT_REGION` | read by the AWS SDK (not needed with IRSA) |
+| `RUST_LOG` | log level, default `info` |
 
-# CLI
+## CLI
 
 ```
 hosts-creator [OPTIONS]
 
-  --config <PATH>             setting.ini のパス           [env: SETTING_FILE]    [default: /etc/create_hosts/setting.ini]
-  --hosts-path <PATH>         書き換え対象の hosts         [env: HOSTS_PATH]      [default: /etc/hosts]
-  --hosts-list <PATH>         解決対象リスト               [env: HOSTS_LIST]      [default: /etc/create_hosts/hosts_list]
-  --rds-hosts-list <PATH>     RDS エンドポイントの出力先    [env: RDS_HOSTS_LIST]  [default: /etc/create_hosts/rds_hosts_list]
-  --redis-hosts-list <PATH>   Redis エンドポイントの出力先  [env: REDIS_HOSTS_LIST][default: /etc/create_hosts/redis_hosts_list]
-  --base-hosts <PATH>         base_hosts の保存先          [env: BASE_HOSTS_FILE] [default: /etc/create_hosts/base_hosts]
-  --once                      1周だけ実行して終了（CronJob・デバッグ用）
-  --dry-run                   解決結果を標準出力に出し、hosts は書き換えない
-  --check-config              設定の検証のみ行う（DNS も AWS も触らない）
+  --config <PATH>            setting.ini            [env: SETTING_FILE]     [default: /etc/create_hosts/setting.ini]
+  --hosts-path <PATH>        file to rewrite        [env: HOSTS_PATH]       [default: /etc/hosts]
+  --hosts-list <PATH>        hostnames to resolve   [env: HOSTS_LIST]       [default: /etc/create_hosts/hosts_list]
+  --rds-hosts-list <PATH>    RDS endpoint output    [env: RDS_HOSTS_LIST]   [default: /etc/create_hosts/rds_hosts_list]
+  --redis-hosts-list <PATH>  Redis endpoint output  [env: REDIS_HOSTS_LIST] [default: /etc/create_hosts/redis_hosts_list]
+  --base-hosts <PATH>        base_hosts location    [env: BASE_HOSTS_FILE]  [default: /etc/create_hosts/base_hosts]
+  --once                     run one cycle and exit (CronJob / debugging)
+  --dry-run                  print the resolution result, do not write
+  --check-config             validate the configuration only (no DNS, no AWS)
 ```
 
-終了コードは 0（正常終了）/ 1（設定不正・名前解決失敗・書き込み失敗）です。
-名前解決に失敗した場合に 1 で終了するのは意図的な設計です（中途半端な `/etc/hosts` を残さない）。
+Exit codes are 0 (ok) and 1 (bad configuration, resolution failure, write failure). Exiting 1 on a
+resolution failure is intentional: a partially written `/etc/hosts` is worse than a restart.
 
-# 使い方
+## Resource usage
 
-```bash
-# 設定の検証
-docker run --rm -v "$PWD/sample/rust:/etc/create_hosts:ro" \
-  rhemsjapan/hosts-creator:rust-latest --check-config
+Measured, not estimated: the published `rust-latest` image (arm64) running with TTL 10s for two minutes,
+reading `cpu.stat` and `memory.current` / `memory.peak` from the cgroup.
 
-# 1周だけ実行して結果を確認（/etc/hosts は変更しない）
-docker run --rm -v "$PWD/sample/rust:/etc/create_hosts:ro" \
-  rhemsjapan/hosts-creator:rust-latest --once --dry-run --base-hosts /tmp/base_hosts
+| metric | 8 hostnames | 62 hostnames |
+|---|---:|---:|
+| resident memory (RSS) | 7.3 MB | 7.4 MB |
+| CPU (share of one core) | 0.05 % | 0.15 % |
+| time per cycle | ~5 ms | ~15 ms |
+| cgroup memory peak | 13.2 MB | 14.4 MB |
+
+There is no cache to fill, so more hostnames lengthen a cycle but barely move memory. The numbers cover
+hosts-creator itself; sidecars such as nginx are separate.
+
+```yaml
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    cpu: 100m
+    memory: 64Mi
 ```
 
-Kubernetes では `sample/rust/` をそのまま使えます（`namespace.yml`・`configMapGenerator` 込み）。
+## AWS permissions
 
-```bash
-kubectl apply -k sample/rust
-```
-`/etc/hosts` は nginx などのサイドカーと **共有ボリューム（emptyDir）経由で同じファイル**を
-マウントする必要があります（別コンテナの `/etc/hosts` は別ファイルです）。
-そのため本実装は `/etc/hosts` を `rename(2)` ではなく in-place で書き換えます
-（subPath マウントされたファイルは rename できないため）。
-
-# ビルド
-
-```bash
-# ローカル
-cargo build --release          # target/release/hosts-creator
-cargo test --all-targets
-cargo clippy --all-targets -- -D warnings
-
-# イメージ
-docker build -t hosts-creator:rust .
-```
-
-このリポジトリはソースのみを置いています（CI/CD の定義は含みません）。
-コンテナイメージは Docker Hub の [`rhemsjapan/hosts-creator`](https://hub.docker.com/r/rhemsjapan/hosts-creator)
-で公開しています。
-
-| タグ | 内容 |
-|---|---|
-| `v0.1.0` | 0.1.0 の固定タグ（amd64 / arm64）。本番はこれを推奨 |
-| `rust-latest` | Rust 版の最新（可変タグ） |
-| `latest` / `py-latest` | 2023 年版の Python 実装（凍結） |
-
-`latest` は 2023 年版のまま固定しており、今後も更新しません。すでに多くの環境で `latest` が使われており、
-黙って中身が入れ替わらないようにするためです。Rust 版は `v0.1.0` か `rust-latest` を指定してください。
-
-# IAM
-
-IAM role でやる場合（IRSA でも同じポリシー）
+The same policy works for an IAM role on the node or for IRSA.
 
 ```json
 {
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Sid": "VisualEditor0",
-            "Effect": "Allow",
-            "Action": [
-                "rds:DescribeDBInstances",
-                "elasticache:DescribeCacheClusters",
-                "elasticache:ListTagsForResource"
-            ],
-            "Resource": "*"
-        }
-    ]
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "VisualEditor0",
+      "Effect": "Allow",
+      "Action": [
+        "rds:DescribeDBInstances",
+        "elasticache:DescribeCacheClusters",
+        "elasticache:ListTagsForResource"
+      ],
+      "Resource": "*"
+    }
+  ]
 }
 ```
 
-# 旧 Python 版（2023）との違い
+## Image tags
 
-|項目|Python 版|Rust 版|
+Images are published at [`rhemsjapan/hosts-creator`](https://hub.docker.com/r/rhemsjapan/hosts-creator).
+
+| tag | contents |
+|---|---|
+| `v0.1.0` / `0.1.0` | pinned 0.1.0 (amd64 / arm64). Use this in production |
+| `rust-latest` | newest Rust build (moving tag) |
+| `latest` / `py-latest` | the 2023 Python implementation, frozen |
+
+`latest` is not switched to the Rust build on purpose: it is already deployed in many places and should
+not change contents silently. Pin `v0.1.0` or `rust-latest` for the Rust version.
+
+## Differences from the 2023 Python version
+
+| item | Python | Rust |
 |---|---|---|
-|書き込み前の検証|書き込んだ後に検証（不正なら Pod 停止、hosts は壊れたまま）|**書き込み前に検証**（不正なら旧内容を保持して停止）|
-|`/etc/hosts` の書き方|内容コピー（in-place）|in-place 固定。subPath マウントでも動く|
-|名前解決|逐次（dnspython）|8並列（hickory）。キャッシュ無効で鮮度は同等|
-|CLI|なし|`--once` / `--dry-run` / `--check-config` / 全パス上書き|
-|`CLOUD_ENV=tencent`|無言でスキップ（実際はリスト未生成で異常終了）|警告を出して空リストで継続|
-|デバッグ用JSONダンプ|`describe_*_response*.json` を出力|出力しない|
-|ログ書式|`[LEVEL time Lline:name]`|`[LEVEL time target]`（行番号のみ欠落）|
-|SIGTERM|即死（書き込み中断の可能性）|1周の完了を待って終了|
-|`base_hosts` の末尾改行なし|次行が連結されて壊れる|改行を補う|
+| validation | after writing (a bad file stays on disk) | **before writing** (old content kept, Pod stops) |
+| write method | content copy (in place) | in place; works with `subPath` mounts |
+| resolution | sequential (dnspython) | 8 in parallel (hickory), cache disabled |
+| CLI | none | `--once` / `--dry-run` / `--check-config` / every path overridable |
+| `CLOUD_ENV=tencent` | skipped silently, then failed on a missing list | warning, continues with an empty list |
+| debug JSON dumps | wrote `describe_*_response*.json` | not written |
+| log format | `[LEVEL time line:name]` | `[LEVEL time target]` |
+| SIGTERM | exits immediately (may interrupt a write) | finishes the current cycle first |
+| `base_hosts` without a trailing newline | next entry got concatenated | newline is added |
 
-# ライセンス
+## Build
 
-MIT（[LICENSE](LICENSE)）。
+```bash
+cargo build --release          # target/release/hosts-creator
+cargo test --all-targets
+cargo clippy --all-targets -- -D warnings
+docker build -t hosts-creator:rust .
+```
+
+This repository holds source only; no CI/CD definitions. Images are published from elsewhere.
+
+## License
+
+MIT ([LICENSE](LICENSE)).
