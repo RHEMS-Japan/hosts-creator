@@ -30,7 +30,7 @@ sequenceDiagram
   end
 ```
 
-# 使い方
+## 使い方
 
 ```bash
 # 設定の検証（DNS も AWS も触らない）
@@ -53,7 +53,7 @@ kubectl apply -k sample/rust
 そのため本実装は `/etc/hosts` を `rename(2)` ではなく in-place で書き換えます
 （subPath マウントされたファイルは rename できないため）。
 
-# setting.ini
+## setting.ini
 
 `example`
 
@@ -91,7 +91,7 @@ SELECT_TAG_VALUE =
 |key/value とも指定|一致するものだけ|一致するものだけ|
 |片方だけ指定|**0件**（設定ミスの可能性大／警告ログ出力）|**全件**（警告ログ出力）|
 
-# 環境変数
+## 環境変数
 
 setting.ini が無い／キーが無い場合に参照されます。
 
@@ -105,7 +105,7 @@ setting.ini が無い／キーが無い場合に参照されます。
 |`AWS_REGION` / `AWS_DEFAULT_REGION`|AWS SDK が参照（IRSA 利用時は不要）|
 |`RUST_LOG`|ログレベル（既定 `info`）|
 
-# CLI
+## CLI
 
 ```
 hosts-creator [OPTIONS]
@@ -124,7 +124,7 @@ hosts-creator [OPTIONS]
 終了コードは 0（正常終了）/ 1（設定不正・名前解決失敗・書き込み失敗）です。
 名前解決に失敗した場合に 1 で終了するのは意図的な設計です（中途半端な `/etc/hosts` を残さない）。
 
-# リソース
+## リソース
 
 公開イメージ（`rust-latest`、arm64）を TTL 10 秒で 2 分間動かし、cgroup の `cpu.stat` と
 `memory.current` / `memory.peak` を読んだ実測値です。
@@ -149,7 +149,7 @@ resources:
     memory: 64Mi
 ```
 
-# IAM
+## IAM
 
 IAM role でやる場合（IRSA でも同じポリシー）
 
@@ -171,7 +171,7 @@ IAM role でやる場合（IRSA でも同じポリシー）
 }
 ```
 
-# イメージタグ
+## イメージタグ
 
 コンテナイメージは Docker Hub の [`rhemsjapan/hosts-creator`](https://hub.docker.com/r/rhemsjapan/hosts-creator)
 で公開しています。
@@ -186,7 +186,7 @@ IAM role でやる場合（IRSA でも同じポリシー）
 すでに多くの環境で `latest` が使われており、黙って中身が入れ替わらないようにするためです。
 Rust 版は `v0.1.0` か `rust-latest` を指定してください。
 
-# 旧 Python 版（2023）との違い
+## 旧 Python 版（2023）との違い
 
 |項目|Python 版|Rust 版|
 |---|---|---|
@@ -200,7 +200,7 @@ Rust 版は `v0.1.0` か `rust-latest` を指定してください。
 |SIGTERM|即死（書き込み中断の可能性）|1周の完了を待って終了|
 |`base_hosts` の末尾改行なし|次行が連結されて壊れる|改行を補う|
 
-# ビルド
+## ビルド
 
 ```bash
 # ローカル
@@ -214,6 +214,6 @@ docker build -t hosts-creator:rust .
 
 このリポジトリはソースのみを置いています（CI/CD の定義は含みません）。
 
-# ライセンス
+## ライセンス
 
 MIT（[LICENSE](LICENSE)）。
