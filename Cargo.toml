@@ -1,0 +1,33 @@
+[package]
+name = "hosts-creator"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+description = "Rust rewrite of rhemsjapan/hosts-creator: resolves configured hostnames and keeps /etc/hosts up to date"
+license = "MIT"
+
+[[bin]]
+name = "hosts-creator"
+path = "src/main.rs"
+
+[lib]
+name = "hosts_creator"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+clap = { version = "4", features = ["derive", "env"] }
+futures = "0.3"
+hickory-resolver = "0.24"
+rust-ini = "0.21"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time", "fs"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-rds = "1"
+aws-sdk-elasticache = "1"
+
+[dev-dependencies]
+tempfile = "3"
