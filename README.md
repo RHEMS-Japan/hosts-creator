@@ -136,10 +136,11 @@ docker build -t hosts-creator:rust .
 | タグ | 内容 |
 |---|---|
 | `v0.1.0` | 0.1.0 の固定タグ（amd64 / arm64）。本番はこれを推奨 |
-| `latest` / `rust-latest` | Rust 版の最新（可変タグ） |
-| `py-latest` | 2023 年版の Python 実装（参照用。更新しません） |
+| `rust-latest` | Rust 版の最新（可変タグ） |
+| `latest` / `py-latest` | 2023 年版の Python 実装（凍結） |
 
-2023 年版の Python 実装は廃止し、`latest` は Rust 版に切り替えました。`py-latest` は参照用に残しています。
+`latest` は 2023 年版のまま固定しており、今後も更新しません。すでに多くの環境で `latest` が使われており、
+黙って中身が入れ替わらないようにするためです。Rust 版は `v0.1.0` か `rust-latest` を指定してください。
 
 # IAM
 
