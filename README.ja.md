@@ -3,6 +3,8 @@
 [English](README.md) | **日本語**
 
 `hosts_list` に書いたホスト名を定期的に名前解決し、`/etc/hosts` を更新し続けるサイドカーです。
+
+製品名は **hosts creator**（リポジトリ名・イメージ名・実行ファイル名は `hosts-creator`）。
 `GET_RDS_ENDPOINT` / `GET_REDIS_ENDPOINT` を有効にすると、AWS 上の RDS / ElastiCache の
 エンドポイントをタグで抽出して同じように hosts に載せます。
 

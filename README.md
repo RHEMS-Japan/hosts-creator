@@ -2,6 +2,9 @@
 
 **English** | [日本語](README.ja.md)
 
+The product name is **hosts creator** (the repository, container image and binary are named
+`hosts-creator`).
+
 A sidecar that keeps `/etc/hosts` up to date by resolving a list of hostnames on a fixed interval.
 With `GET_RDS_ENDPOINT` / `GET_REDIS_ENDPOINT` enabled it also discovers RDS and ElastiCache endpoints
 in AWS by tag and writes those into the same file.
